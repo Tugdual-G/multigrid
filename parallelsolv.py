@@ -3,13 +3,12 @@
 j
 """
 import numpy as np
-import matplotlib.pyplot as plt
 from numba import jit
 from time import perf_counter
 from mpi4py import MPI
 
 
-class communications:
+class Buffers:
     def __init__(self, shape, var, width):
         self.comm = MPI.COMM_WORLD
         self.var = var
@@ -86,7 +85,7 @@ def iterate(a, a_new, ny, nx):
             )
 
 
-def gauss_seidel(b, a, a_new, shape, epsilon, com):
+def smooth_parallel(b, a, a_new, shape, epsilon, com):
     """loop."""
     ny, nx = shape
     err = epsilon + 1
