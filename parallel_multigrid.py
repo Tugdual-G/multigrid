@@ -122,41 +122,39 @@ def smooth_sweep(b, a, h, shape):
                 + a[j - 1, i]
                 - h ** 2 * b[j, i]
             )
-    # Go back in the opposite direction
-    for j in range(ny - 2, 0, -1):
-        for i in range(nx - 2, 0, -1):
-            a[j, i] = 0.25 * (
-                a[j, i + 1]
-                + a[j, i - 1]
-                + a[j + 1, i]
-                + a[j - 1, i]
-                - h ** 2 * b[j, i]
-            )
 
 
+@jit(nopython=True, cache=True)
 def smooth(b, x, h, lplc, r, shape, iterations):
 
-    for i in range(iterations):
-        smooth_sweep(b, x, h, shape)
-
+    ny, nx = shape
+    for k in range(iterations):
+        for j in range(1, ny - 1):
+            for i in range(1, nx - 1):
+                x[j, i] = 0.25 * (
+                    x[j, i + 1]
+                    + x[j, i - 1]
+                    + x[j + 1, i]
+                    + x[j - 1, i]
+                    - h ** 2 * b[j, i]
+                )
     laplacian(x, lplc, h)
     # Computing the residual.
     r[:] = b - lplc
 
 
-def smooth_parallel(b, a, h, lplc, r, shape, iterations, com):
+def smooth_parallel(b, x, h, lplc, r, shape, iterations, com):
     """loop."""
     ny, nx = shape
 
     for i in range(iterations):
         com.fill_buffers()
         com.fill_var()
-        smooth_sweep(b, a, h, shape)
-
+        smooth_sweep(b, x, h, shape)
     com.fill_buffers()
     com.fill_var()
 
-    laplacian(a, lplc, h)
+    laplacian(x, lplc, h)
     # Computing the residual.
     r[:] = b - lplc
 
@@ -198,11 +196,11 @@ def interpolate_add_to(a, a_new):
             a_new[2 * j + 1, 2 * i] += (a[j, i] + a[j + 1, i]) / 2
 
 
-def gather_blocks(comm, M_block, M_full, rank):
+def gather_blocks(comm, M_block, M_full, rank, overlap=2):
     _, nx = M_block.shape
     nx2 = nx - 1
     _, nx0 = M_full.shape
-    assert nx2*2 == nx0 + 1
+    # assert nx2*2 == nx0 + 1
 
     M_blocks = []
     for i in range(4):
@@ -215,127 +213,181 @@ def gather_blocks(comm, M_block, M_full, rank):
         comm.Bcast(M_blocks[i], i)
 
     M_full[:nx2, :nx2] = M_blocks[0][:-1, :-1]
-    M_full[:nx2, nx2:] = M_blocks[1][:-1, 2:]
-    M_full[nx2:, :nx2] = M_blocks[2][2:, :-1]
-    M_full[nx2:, nx2:] = M_blocks[3][2:, 2:]
+    M_full[:nx2, nx2:] = M_blocks[1][:-1, overlap:]
+    M_full[nx2:, :nx2] = M_blocks[2][overlap:, :-1]
+    M_full[nx2:, nx2:] = M_blocks[3][overlap:, overlap:]
 
     # if rank == 0:
     #     plt.pcolormesh(M_full)
     #     plt.show()
 
+class Multigrid:
+    def __init__(self, b0, x0, r0, h0, epsilon, n):
+        _, self.nx = x0.shape
+        self.n = n
+        self.x = []
+        self.b = []
+        self.lplc = []
+        self.r = []
+        self.h = []
+        self.b0 = b0
+        self.x0 = x0
+        self.r0 = r0
+        self.h0 = h0
+        self.epsilon = epsilon
+        for i in range(1, n+1):
+            self.x += [np.zeros((2 ** i + 1, 2 ** i + 1))]
+            self.b += [np.zeros((2 ** i + 1, 2 ** i + 1))]
+            self.lplc += [np.zeros((2 ** i + 1, 2 ** i + 1))]
+            self.r += [np.zeros((2 ** i + 1, 2 ** i + 1))]
+            self.h += [h0 * 2 ** (n + 1 - i)]
 
-def poisson_multigrid(b0, x0, r0, h0, epsilon, n):
-    """
-    Solve the Poisson equation by reapeating v cycles.
-    """
-    # on 4 core processors:
-    # Smooth in parallel (h)
-    # Reduce on coarse gird in parallel
-    # Gather residual to all
-    # End of parallel communications
-    # continue v cycle on the global residual
-    # go up in v cycle
-    # reach level (h2)
-    # smooth h2
-    # split data
-    # Interpolate to process subdomain in h
-    # start parallel communications again
-    # Smooth in parallel
+        self.x += [x0]
+        self.b += [b0]
+        self.lplc += [np.zeros_like(b0)]
+        self.r += [r0]
+        self.h += [h0]
 
-    ny, nx = x0.shape
-    x = []
-    b = []
-    lplc = []
-    r = []
-    h = []
-    for i in range(1, n+1):
-        x += [np.zeros((2 ** i + 1, 2 ** i + 1))]
-        b += [np.zeros((2 ** i + 1, 2 ** i + 1))]
-        lplc += [np.zeros((2 ** i + 1, 2 ** i + 1))]
-        r += [np.zeros((2 ** i + 1, 2 ** i + 1))]
-        h += [h0 * 2 ** (n + 1 - i)]
+        self.temp = np.zeros((2**(n-1)+2, (2**(n-1)+2)))
+        self.buff = Buffers(x0.shape, x0, 1, 3)
 
-    x += [x0]
-    b += [b0]
-    lplc += [b0.copy()]
-    r += [r0]
-    h += [h0]
+    def solve(self):
+        """
+        Solve the Poisson equation by reapeating v cycles.
+        """
+        # on 4 core processors:
+        # Smooth in parallel (self.h)
+        # Reduce on coarse gird in parallel
+        # Gather residual to all
+        # End of parallel communications
+        # continue v cycle on the global residual
+        # go up in v cycle
+        # reach level (h2)
+        # smooth h2
+        # split data
+        # Interpolate to process subdomain in h
+        # start parallel communications again
+        # Smooth in parallel
+        it = 0
+        status = 0
+        err_old = 1000
+        fail = False
+        self.b0[0, :] = 0
+        self.b0[-1, :] = 0
+        self.b0[:, -1] = 0
+        self.b0[:, 0] = 0
+        x0 = self.x0
+        n1 = 50
+        n2 = 50
+        x = self.x
 
-    buff = Buffers(x0.shape, x0, 1, 3)
-    temp_coarse = np.zeros((2**(n-1)+2, (2**(n-1)+2)))
-
-    err = epsilon + 1
-    it = 0
-
-    if True:
-    # while err > epsilon:
-        smooth_parallel(b0, x0, h0, lplc[-1], r0, x0.shape, 2, buff)
-        coarse(r[-1], temp_coarse)
-        # Reduce to b[2]
-        gather_blocks(buff.comm, temp_coarse, b[-2], buff.rank)
         # Iterate until the residual is smaller than epsilon.
-        for i in range(2, n+1):
-            smooth(b[-i], x[-i], h[-i], lplc[-i], r[-i], x[-i].shape, 2)
-            coarse(r[-i], b[-i - 1])
+        smooth_parallel(self.b0, x0, self.h0, self.lplc[-1], self.r0, x0.shape, n1, self.buff)
+        while status < 4 and it < 8:
+            coarse(self.r0, self.temp)
+            gather_blocks(self.buff.comm, self.temp, self.b[-2], self.buff.rank)
+            for i in range(2, self.n+1):
+                smooth(self.b[-i], x[-i], self.h[-i], self.lplc[-i], self.r[-i], x[-i].shape, n2)
+                coarse(self.r[-i], self.b[-i - 1])
 
-        smooth(b[0], x[0], h[0], lplc[0], r[0], x[0].shape, 3)
-        for i in range(1, n):
-            interpolate_add_to(x[i - 1], x[i])
-            smooth(b[i], x[i], h[i], lplc[i], r[i], x[i].shape, 3)
+            smooth(self.b[0], x[0], self.h[0], self.lplc[0], self.r[0], x[0].shape, n2)
+            for i in range(1, self.n):
+                interpolate_add_to(x[i - 1], x[i])
+                smooth(self.b[i], x[i], self.h[i], self.lplc[i], self.r[i], x[i].shape, n2)
 
-        split(buff.rank, x[-2], temp_coarse)
-        interpolate_add_to(temp_coarse, x[-1])
-        smooth_parallel(b0, x0, h0, lplc[-1], r0, x0.shape, 3, buff)
-        err = np.amax(np.abs(r[-1][1:-1, 1:-1]))
-        it += 1
-    print("v cycles :", it)
+            split(self.buff.rank, x[-2], self.temp)
+            interpolate_add_to(self.temp, x[-1])
+            smooth_parallel(self.b0, x0, self.h0, self.lplc[-1], self.r0, x0.shape, n1, self.buff)
+            self.buff.comm.barrier()
+            # if self.buff.rank==0:
+            #     plt.pcolormesh(x0)
+            #     plt.title(f"{self.buff.rank}")
+            #     plt.colorbar()
+            #     plt.show()
+
+            err = np.amax(np.abs(self.r0))
+            if self.buff.rank==0:
+                if err > err_old:
+                    print("error")
+
+            if err > err_old:
+                fail = True
+
+            err_old = err
+            if err > self.epsilon and not fail:
+                status = self.buff.comm.allreduce(0)
+            else:
+                status = self.buff.comm.allreduce(1)
+            it += 1
+        if self.buff.rank == 0:
+            print("v cycles :", it)
+        self.buff.comm.barrier()
 
 
 def test():
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
-    n = 6
-    epsilon = 0.1
+    n = 8
+    epsilon = 0.001
     nx1 = 2 ** n + 1
     nx0 = 2 ** (n + 1) + 1
     nx1_sub = nx1 + 2
-
+    b_max = 50
     print(f"nx = {nx1_sub}")
     x = np.linspace(-10, 10, nx0)
     y = np.linspace(-10, 10, nx0)
     h = y[1] - y[0]
     X, Y = np.meshgrid(x, y)
-    r = X ** 2 + Y ** 2
-    b0 = 50 * np.exp(-r * 4)
-    r = (4 + X) ** 2 + Y ** 2
-    b0 -= 50 * np.exp(-r * 4)
-    r = (5 + X) ** 2 + (5 + Y) ** 2
-    b0 += 50 * np.exp(-r * 4)
-    r = (X - 5) ** 2 + (Y - 2) ** 2
-    b0 -= 50 * np.exp(-r * 4)
-    r = (X - 5) ** 2 + (Y + 2) ** 2
-    b0 -= 50 * np.exp(-r * 4)
+
+    xr = [ 4, -2,  6,  3,  3,  5, -5, -7]
+    yr = [-2,  6,  6, -5,  5, -5, -2, -2]
+    print(yr)
+    r = (X-x) ** 2 + (Y-y) ** 2
+    b0 = X*0
+    sign = 1
+    for x, y in zip(xr, yr):
+        r = (X-x) ** 2 + (Y-y) ** 2
+        b0 += sign*b_max * np.exp(-r * 7)
+        sign *= -1
 
     b = np.zeros((nx1_sub, nx1_sub))
     split(rank, b0, b)
 
     a = np.zeros_like(b)
     R = np.zeros_like(a)
+
+    poisson = Multigrid(b, a, R, h, epsilon, n)
+
     t0 = perf_counter()
-    poisson_multigrid(b, a, R, h, epsilon, n)
+    poisson.solve()
     t1 = perf_counter()
     print(f"time multi 1    {t1-t0} s")
 
-    fig, ax = plt.subplots(1, 2)
-    ax0, ax1 = ax
-    ax0.pcolormesh(a)
-    a_max = np.amax(np.abs(a))
-    cm = ax1.pcolormesh(R / a_max, cmap="bwr")
-    fig.suptitle(f"{nx0}x{nx0} grid points , rank{rank}")
-    ax0.set_title("Phi")
-    ax1.set_title("Residual / max(Phi)")
-    plt.colorbar(cm)
-    plt.show()
+    t = 0
+    for i in range(10):
+        a[:] = 0
+        t0 = perf_counter()
+        poisson.solve()
+        t1 = perf_counter()
+        t += t1-t0
+    print(f"time multi 1    {t/10} s")
+
+    a_full = np.zeros_like(b0)
+    R_full = np.zeros_like(b0)
+    gather_blocks(comm, a, a_full, rank, 4)
+    gather_blocks(comm, R, R_full, rank, 4)
+
+    if rank==0:
+        fig, ax = plt.subplots(1, 2)
+        ax0, ax1 = ax
+        ax0.pcolormesh(a_full)
+        r_max = np.amax(np.abs(R_full/b_max))
+        cm = ax1.pcolormesh(R_full / b_max, cmap="bwr", vmin=-r_max, vmax=r_max)
+        fig.suptitle(f"{nx0}x{nx0} grid points")
+        ax0.set_title("Phi")
+        ax1.set_title("Residual / max(B)")
+        plt.colorbar(cm)
+        plt.show()
 
 if __name__ == "__main__":
     test()
