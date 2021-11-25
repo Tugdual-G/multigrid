@@ -4,7 +4,7 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-from numba import jit
+from numba import jit, stencil
 from time import perf_counter
 
 
@@ -19,70 +19,53 @@ def laplacian(a, lplc, h=1):
 
 
 @jit(nopython=True, cache=True)
-def smooth(b, a, h, lplc, r, shape, iterations):
-    """Gauss-Seidel method for multigrid."""
+def gauss_seidel(b, a, h, lplc, r, shape, iterations):
+    """Gauss-Seidel method for comparaison."""
     ny, nx = shape
+    a_new = np.zeros_like(a)
 
-    for it in range(iterations):
+    for k in range(iterations):
         for j in range(1, ny - 1):
             for i in range(1, nx - 1):
                 a[j, i] = 0.25 * (
                     a[j, i + 1] + a[j, i - 1] + a[j + 1, i] +
                     a[j - 1, i] - h**2*b[j, i])
-        # Go back in the opposite direction
-        for j in range(ny - 2, 0, -1):
-            for i in range(nx - 2, 0, -1):
-                a[j, i] = 0.25 * (
-                    a[j, i + 1] + a[j, i - 1] + a[j + 1, i] +
-                    a[j - 1, i] - h**2*b[j, i])
+        # # Go back in the opposite direction
+        # for j in range(ny - 2, 0, -1):
+        #     for i in range(nx - 2, 0, -1):
+        #         a[j, i] = 0.25 * (
+        #             a[j, i + 1] + a[j, i - 1] + a[j + 1, i] +
+        #             a[j - 1, i] - h**2*b[j, i])
 
     laplacian(a, lplc, h)
     # Computing the residual.
     r[:] = b - lplc
-
-
-@jit(nopython=True, cache=True)
-def poisson_checkerboard(b, a, h, lplc, r, shape, epsilon):
-    """Alternate iterations in a checker-board patern."""
-    ny, nx = shape
-    max_residual = epsilon + 1
-    while max_residual > epsilon:
-        for k in range(2):
-            for j in range(1, ny-1):
-                k %= 2
-                for ix in range(nx // 2 + nx % 2 * (1-k)-1):
-                    i = ix*2 + k + 1
-                    a[j, i] = 0.25*(a[j, i+1]+a[j, i-1] +
-                                    a[j+1, i] + a[j-1, i] - h**2*b[j, i])
-                k += 1
-
-        laplacian(a, lplc, h)
-        max_residual = np.amax(np.abs(b[1:-1, 1:-1]-lplc[1:-1, 1:-1]))
-
-    # Computing the residual.
-    r[:] = b - lplc
+@stencil
+def jacob(a, h):
+    return 0.25*(a[0, 0, 1] + a[0, 0, -1] + a[0, -1, 0] + a[0, 1, 0]- h**2*a[1, 0, 0])
 
 @jit(nopython=True, cache=True)
-def gauss_seidel(b, a, h, lplc, r, shape, epsilon):
+def gauss_seidel_diag(b, a, h, lplc, r, shape, iterations):
     """Gauss-Seidel method for comparaison."""
     ny, nx = shape
-    max_residual = epsilon + 1
+    a_new = np.zeros((2, nx, nx))
+    a_new[1] = b
+    a_new[0] = a
 
-    while max_residual > epsilon:
-        for j in range(1, ny - 1):
-            for i in range(1, nx - 1):
-                a[j, i] = 0.25 * (
-                    a[j, i + 1] + a[j, i - 1] + a[j + 1, i] +
-                    a[j - 1, i] - h**2*b[j, i])
-        # Go back in the opposite direction
-        for j in range(ny - 2, 0, -1):
-            for i in range(nx - 2, 0, -1):
-                a[j, i] = 0.25 * (
-                    a[j, i + 1] + a[j, i - 1] + a[j + 1, i] +
-                    a[j - 1, i] - h**2*b[j, i])
+    for k in range(iterations):
+        jacob(a_new, h)
+        # # Go back in the opposite direction
+        # for j in range(ny - 2, 0, -1):
+        #     for i in range(nx - 2, 0, -1):
+        #         a[j, i] = 0.25 * (
+        #             a[j, i + 1] + a[j, i - 1] + a[j + 1, i] +
+        #             a[j - 1, i] - h**2*b[j, i])
 
-        laplacian(a, lplc, h)
-        max_residual = np.amax(np.abs(b[1:-1, 1:-1]-lplc[1:-1, 1:-1]))
+    a[:] = a_new[0, :, :]
+    for j in range(1, ny-1):
+        for i in range(1, nx-1):
+            lplc[j, i] = (a[j, i-1] + a[j, i+1] + a[j-1, i] +
+                          a[j+1, i] - 4*a[j, i])/(h**2)
     # Computing the residual.
     r[:] = b - lplc
 
@@ -90,16 +73,9 @@ def gauss_seidel(b, a, h, lplc, r, shape, epsilon):
 @jit(nopython=True, cache=True)
 def coarse(a, a_crs):
     """Reduction on coarser grid."""
-    # a_left = a[0, 0] / 8 + a[1, 0] / 16
-    # for i in range(1, a_crs.shape[1] - 1):
-    #     a_right = a[0, 2 * i + 1] / 8 + a[1, 2 * i + 1] / 16
-    #     a_crs[0, i] = a[0, 2 * i] / 2 + a[1, 2 * i] / 8
-    #     a_crs[0, i] += a_right + a_left
-    #     a_left = a_right
 
     for j in range(1, a_crs.shape[0] - 1):
         a_left = a[2 * j, 1] / 8 + (a[2 * j + 1, 1] + a[2 * j - 1, 1]) / 16
-        # a_crs[j, 0] = a_left + a[2 * j, 0] / 2 + (a[2 * j + 1, 0] + a[2 * j - 1, 0]) / 8
         for i in range(1, a_crs.shape[1] - 1):
             a_right = (
                 a[2 * j, 2 * i + 1] / 8
@@ -111,16 +87,6 @@ def coarse(a, a_crs):
             )
             a_crs[j, i] += a_right + a_left
             a_left = a_right
-        # a_crs[j, -1] = (
-        #     a_left + a[2 * j, -1] / 2 + (a[2 * j + 1, -1] + a[2 * j - 1, -1]) / 8
-        # )
-
-    # a_left = a[-1, 0] / 8 + a[-2, 0] / 16
-    # for i in range(1, a_crs.shape[1] - 1):
-    #     a_right = a[-1, 2 * i + 1] / 8 + a[-2, 2 * i + 1] / 16
-    #     a_crs[-1, i] = a[-1, 2 * i] / 2 + a[-2, 2 * i] / 8
-    #     a_crs[-1, i] += a_right + a_left
-    #     a_left = a_right
 
 
 @jit(nopython=True, cache=True)
@@ -150,55 +116,6 @@ def interpolate_into(a, a_add):
     a_add += a_i
 
 
-def poisson_multigrid(b0, x0, r0, h0, epsilon, n):
-    """
-    Solve the Poisson equation by reapeating v cycles.
-    """
-    ny, nx = x0.shape
-    x = []
-    b = []
-    lplc = []
-    r = []
-    h = []
-    for i in range(1, n):
-        x += [np.zeros((2 ** i + 1, 2 ** i + 1))]
-        b += [np.zeros((2 ** i + 1, 2 ** i + 1))]
-        lplc += [np.zeros((2 ** i + 1, 2 ** i + 1))]
-        r += [np.zeros((2 ** i + 1, 2 ** i + 1))]
-        h += [h0*2**(n-i)]
-
-    x += [x0]
-    b += [b0]
-    lplc += [b0.copy()]
-    r += [r0]
-    h += [h0]
-    err = epsilon + 1
-    it = 0
-
-    while err > epsilon:
-        # Iterate until the residual is smaller than epsilon.
-        for i in range(1, n):
-            smooth(b[-i], x[-i], h[-i], lplc[-i], r[-i], x[-i].shape, 2)
-            coarse(r[-i], b[-i-1])
-
-        smooth(b[0], x[0], h[0], lplc[0], r[0], x[0].shape, 3)
-        for i in range(1, n):
-            interpolate_into(x[i-1], x[i])
-            smooth(b[i], x[i], h[i], lplc[i], r[i], x[i].shape, 3)
-
-        err = np.amax(np.abs(r[-1][1:-1, 1:-1]))
-        it += 1
-    print("v cycles :", it)
-
-
-def poisson(b, a, r, h, epsilon):
-    """
-    Solve the Poisson equation using Gauss-Seidel Method.
-    """
-    lplc = b.copy()
-
-    gauss_seidel(b, a, h, lplc, r, a.shape, epsilon)
-
 
 def test():
     n = 5
@@ -223,38 +140,40 @@ def test():
     b = b0*1.01
 
     R = np.zeros_like(a)
-    t0 = perf_counter()
-    poisson_multigrid(b0, a, R, h, epsilon, n)
-    t1 = perf_counter()
-    print(f"time multi 1    {t1-t0} s", flush=True)
-    t0 = perf_counter()
-    poisson_multigrid(b, a, R, h, epsilon, n)
-    t1 = perf_counter()
-    print(f"time multi 2    {t1-t0} s", flush=True)
-    fig, ax = plt.subplots(1, 2)
-    ax0, ax1 = ax
-    ax0.pcolormesh(a)
-    a_max = np.amax(np.abs(a))
-    cm = ax1.pcolormesh(R/a_max, cmap="bwr")
+    lplc = np.zeros_like(a)
+    a = np.zeros_like(b)
+    gauss_seidel_diag(b0, a, h, lplc, R, (nx, nx), 100)
 
-    fig.suptitle("1024x1024 grid points")
-    ax0.set_title("Phi")
-    ax1.set_title("Residual / max(Phi)")
-    plt.colorbar(cm)
-    plt.show()
+    t0 = perf_counter()
+    for i in range(50):
+        a = np.zeros_like(b)
+        gauss_seidel(b0, a, h, lplc, R, (nx, nx), 100)
+    t1 = perf_counter()
+    max_r = np.amax(np.abs(R))
+    print(f"time multi 1    {t1-t0} s, max r {max_r}", flush=True)
 
-    a[:] = 0
+    a = np.zeros_like(b)
     t0 = perf_counter()
-    poisson(b0, a, R, h, epsilon)
+    for i in range(50):
+        a = np.zeros_like(b)
+        gauss_seidel_diag(b0, a, h, lplc, R, (nx, nx), 100)
     t1 = perf_counter()
-    print(f"time poisson 1  {t1-t0} s", flush=True)
-    t0 = perf_counter()
-    poisson(b, a, R, h, epsilon)
-    t1 = perf_counter()
-    print(f"time poisson 2  {t1-t0} s", flush=True)
-    # plt.pcolormesh(a)
-    # plt.colorbar()
+    max_r = np.amax(np.abs(R))
+    print(f"time multi 2    {t1-t0} s, max r {max_r}", flush=True)
+
+
+    # fig, ax = plt.subplots(1, 2)
+    # ax0, ax1 = ax
+    # ax0.pcolormesh(a)
+    # a_max = np.amax(np.abs(a))
+    # cm = ax1.pcolormesh(R/a_max, cmap="bwr")
+
+    # fig.suptitle("1024x1024 grid points")
+    # ax0.set_title("Phi")
+    # ax1.set_title("Residual / max(Phi)")
+    # plt.colorbar(cm)
     # plt.show()
+
 
 
 def test_interpol():

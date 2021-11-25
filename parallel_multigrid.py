@@ -69,9 +69,9 @@ class Buffers:
         """Fill the communication buffers."""
         send = self.send_buffers
         slices = self.send_slices
-        MPI.Prequest.Startall(self.reqr)
         for direction in self.neighbours.keys():
             send[direction][:] = self.var[slices[direction]]
+        MPI.Prequest.Startall(self.reqr)
         MPI.Prequest.Startall(self.reqs)
         MPI.Prequest.Waitall(self.reqs)
 
@@ -169,7 +169,7 @@ class Multigrid:
         self.b0[:, -1] = 0
         self.b0[:, 0] = 0
         x0 = self.x0
-        n1 = 10
+        n1 = 5
         n2 = 20
         x = self.x
 

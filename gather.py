@@ -3,6 +3,26 @@ import numpy as np
 from numba import jit
 import matplotlib.pyplot as plt
 from mpi4py import MPI
+from parallel_multigrid import Buffers
+
+def interpolate_add_to(a, a_new):
+    """Interpolate."""
+    for j in range(1, a.shape[0] - 1):
+        for i in range(1, a.shape[1] - 1):
+            a_new[2 * j, 2 * i] += a[j, i]
+    for j in range(0, a.shape[0] - 1):
+        for i in range(0, a.shape[1] - 1):
+            a_new[2 * j + 1, 2 * i + 1] += (
+                a[j + 1, i + 1] + a[j + 1, i] + a[j, i + 1] + a[j, i]
+            ) / 4
+    for j in range(1, a.shape[0] - 1):
+        for i in range(0, a.shape[1] - 1):
+            a_new[2 * j, 2 * i + 1] += (a[j, i] + a[j, i + 1]) / 2
+
+    for j in range(0, a.shape[0] - 1):
+        for i in range(1, a.shape[1] - 1):
+            a_new[2 * j + 1, 2 * i] += (a[j, i] + a[j + 1, i]) / 2
+
 
 @jit(nopython=True, cache=True)
 def coarse(a, a_crs):
@@ -63,26 +83,69 @@ if __name__ == "__main__":
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
 
-    n = 3
+    depth_para = 3
+    n = 7
     nx0 = 2**(1+n) + 1
-    nx1 = 2**n + 1
-    nx1_sub = 2**n + 3
-    nx2 = 2**(n-1) + 1
-    nxi = nx1_sub-2
 
-    x = np.arange(nx0)
+    # nx1_sub = 2**n + 2
+    # nxi = nx1_sub-2
+
+    x = np.linspace(-5, 5, nx0)# +6-2*rank
     X, Y = np.meshgrid(x, x)
-    A = X+Y
-    A_sub = np.ones((nx1_sub, nx1_sub))
-    split(rank, A, A_sub)
+    R = X**2+Y**2
+    A = np.exp(-R/4)
+    A[0, :] = 0
+    A[-1, :] = 0
+    A[:, -1] = 0
+    A[:, 0] = 0
 
-    # M_block += rank*4
-    A_2 = np.zeros((nx2+1, nx2+1))
-    coarse(A_sub, A_2)
-    M_block = A_2+rank*2
-    M_full = np.zeros((nx1, nx1))
-    gather_blocks(comm, M_block, M_full)
+    whole = [np.zeros((2**(n-i)+1, 2**(n-i)+1)) for i in range(depth_para-1, n)]
+    sub = [np.zeros((2**(n-i)+2, 2**(n-i)+2)) for i in range(depth_para+1)]
+    buf = [Buffers(sub[i].shape, sub[i], 1, 1) for i in range(depth_para)]
+    # sub_temp = np.zeros((2**(n-depth_para)+2, 2**(n-depth_para)+2))
 
-    if rank == 0:
-        plt.pcolormesh(M_full)
+    split(rank, A, sub[0])
+
+    for i in range(depth_para):
+        # smooth ...
+        buf[i].fill_buffers()
+        buf[i].fill_var()
+        buf[i].fill_buffers()
+        buf[i].fill_var()
+        coarse(sub[i], sub[i+1])
+        if rank == 3:
+            plt.pcolormesh(sub[i+1])
+            plt.title(f"sub {i+1}")
+            plt.colorbar()
+            plt.show()
+
+    gather_blocks(comm, sub[-1], whole[0])
+    if rank == 3:
+        plt.pcolormesh(whole[0])
+        plt.title("whole 0")
+        plt.colorbar()
         plt.show()
+
+    for i in range(n-depth_para):
+        coarse(whole[i], whole[i+1])
+        if rank == 3:
+            plt.pcolormesh(whole[i+1])
+            plt.title(f"whole {i+1}")
+            plt.colorbar()
+            plt.show()
+
+    for i in range(1, n-depth_para+1):
+        whole[-i-1][:] = 0
+        interpolate_add_to(whole[-i], whole[-i-1])
+        if rank == 3:
+            plt.pcolormesh(whole[-i-1])
+            plt.title(f"whole {len(whole)-i-1}")
+            plt.colorbar()
+            plt.show()
+
+
+    # sub3_temp = np.zeros((nx3+1, nx3+1))
+    # split(rank, sub2_whole, sub3_temp)
+    # sub2_old = sub2.copy()
+    # sub2[:] = 0
+    # interpolate_add_to(sub3_temp, sub2)
