@@ -6,7 +6,7 @@ cc = CC('multigrid_module')
 # Uncomment the following line to print out the compilation steps
 #cc.verbose = True
 
-@cc.export('split', '(f8[:, :], f8[:, :], u1)')
+@cc.export('split', '(double[:, :], double[:, :], int64)')
 def split(A_in, A_out, rank):
     nx_out, ny = A_out.shape
     if rank == 0:
@@ -44,7 +44,22 @@ def smooth_sweep(b, a, h):
                 - h ** 2 * b[j, i]
             )
 
-@cc.export('smooth', '(f8[:, :], f8[:, :], f8, f8[:, :], f8[:, :], u8)')
+@cc.export('smooth_sweep_back', '(f8[:, :], f8[:, :], f8)')
+def smooth_sweep_back(b, a, h):
+    """Gauss-Seidel method for multigrid."""
+    ny, nx = a.shape
+
+    for j in range(ny-2, 0, -1):
+        for i in range(nx - 2, 0, -1):
+            a[j, i] = 0.25 * (
+                a[j, i + 1]
+                + a[j, i - 1]
+                + a[j + 1, i]
+                + a[j - 1, i]
+                - h ** 2 * b[j, i]
+            )
+
+@cc.export('smooth', '(f8[:, :], f8[:, :], f8, f8[:, :], f8[:, :], int64)')
 def smooth(b, x, h, lplc, r, iterations):
 
     ny, nx = x.shape
@@ -68,7 +83,7 @@ def smooth(b, x, h, lplc, r, iterations):
             ) / (h ** 2)
     r[:] = b - lplc
 
-@cc.export('coarse', '(f8[:, :], f8[:, :], i1, i1)')
+@cc.export('coarse', '(f8[:, :], f8[:, :], int64, int64)')
 def coarse(a, a_crs, ofst_i=0, ofst_j=0):
     """Reduction on coarser grid."""
     for j in range(1, a_crs.shape[0] - 1):
@@ -86,7 +101,7 @@ def coarse(a, a_crs, ofst_i=0, ofst_j=0):
             a_left = a_right
 
 
-@cc.export('interpolate_add_to', '(f8[:, :], f8[:, :], i1, i1)')
+@cc.export('interpolate_add_to', '(f8[:, :], f8[:, :], int64, int64)')
 def interpolate_add_to(a, a_new, ofst_i=0, ofst_j=0):
     """Interpolate."""
     for j in range(1, a.shape[0] - 1):

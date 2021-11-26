@@ -4,8 +4,9 @@ from numba import jit
 import matplotlib.pyplot as plt
 from mpi4py import MPI
 from parallel_multigrid import Buffers
-from multigrid_module import interpolate_add_to, coarse
+from multigrid_module import interpolate_add_to, coarse, split
 
+# @jit(nopython=True, cache=True)
 # def interpolate_add_to(a, a_new, ofst_i=0, ofst_j=0):
 #     """Interpolate."""
 #     for j in range(1, a.shape[0] - 1):
@@ -43,17 +44,18 @@ from multigrid_module import interpolate_add_to, coarse
 #             a_left = a_right
 
 
-@jit(nopython=True, cache=True)
-def split(A_in, A_out, rank):
-    nx_out, _ = A_out.shape
-    if rank == 0:
-        A_out[:] = A_in[0: nx_out, 0: nx_out]
-    elif rank == 1:
-        A_out[:] = A_in[0: nx_out, -nx_out:]
-    elif rank == 2:
-        A_out[:] = A_in[-nx_out:, 0: nx_out]
-    elif rank == 3:
-        A_out[:] = A_in[-nx_out:, -nx_out:]
+# sign1 = '(double[:, :], double[:, :], int64)'
+# @jit(sign1, nopython=True, cache=True)
+# def split(A_in, A_out, rank):
+#     nx_out, _ = A_out.shape
+#     if rank == 0:
+#         A_out[:] = A_in[0: nx_out, 0: nx_out]
+#     elif rank == 1:
+#         A_out[:] = A_in[0: nx_out, -nx_out:]
+#     elif rank == 2:
+#         A_out[:] = A_in[-nx_out:, 0: nx_out]
+#     elif rank == 3:
+#         A_out[:] = A_in[-nx_out:, -nx_out:]
 
 
 
@@ -63,6 +65,7 @@ def gather_blocks(comm, M_block, M_full):
     _, nx0 = M_full.shape
     assert nx2*2 == nx0 + 1
     rank = comm.Get_rank()
+    print(type(rank))
 
     M_blocks = []
     for i in range(4):
@@ -72,8 +75,7 @@ def gather_blocks(comm, M_block, M_full):
             M_blocks += [np.zeros_like(M_block)]
 
     for i in range(4):
-        comm.Ibcast(M_blocks[i], i)
-    comm.barrier()
+        comm.Bcast(M_blocks[i], i)
 
     M_full[:nx2, :nx2] = M_blocks[0][:-1, :-1]
     M_full[:nx2, nx2:] = M_blocks[1][:-1, 2:]
@@ -97,7 +99,8 @@ if __name__ == "__main__":
 
     x = np.arange(nx0)
     X, Y = np.meshgrid(x, x)
-    A = X+Y
+    A = np.zeros_like(X, dtype=np.double)
+    A[:] = X+Y
     A[0, :] = 0
     A[-1, :] = 0
     A[:, -1] = 0
@@ -133,6 +136,11 @@ if __name__ == "__main__":
     # _________Whole domain
     #
     gather_blocks(comm, sub[-1], whole[0])
+    if rank == 3:
+        plt.pcolormesh(whole[0])
+        plt.title(f"sub {len(sub)-i-1}")
+        plt.colorbar()
+        plt.show()
     for i in range(n-n_para):
         coarse(whole[i], whole[i+1], 0, 0)
 
@@ -147,16 +155,16 @@ if __name__ == "__main__":
     split(whole[0], sub[-1], rank)
     for i in range(1, n_para):
         interpolate_add_to(sub[-i], sub[-i-1], ofst["i"], ofst["j"])
-        if rank == 3:
-            plt.pcolormesh(sub[-i-1])
-            plt.title(f"sub {len(sub)-i-1}")
-            plt.colorbar()
-            plt.show()
+        # if rank == 3:
+        #     plt.pcolormesh(sub[-i-1])
+        #     plt.title(f"sub {len(sub)-i-1}")
+        #     plt.colorbar()
+        #     plt.show()
 
     A[:] = 0
     gather_blocks(comm, sub[0], A)
-    if rank == 3:
-        plt.pcolormesh(A)
-        plt.title(f"whole")
-        plt.colorbar()
-        plt.show()
+    # if rank == 3:
+    #     plt.pcolormesh(A)
+    #     plt.title(f"whole")
+    #     plt.colorbar()
+    #     plt.show()

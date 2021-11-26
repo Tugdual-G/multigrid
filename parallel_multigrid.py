@@ -6,14 +6,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from time import perf_counter
 from mpi4py import MPI
-from multigrid_module import (laplacian, smooth_sweep,
-                              smooth, coarse, interpolate_add_to)
+from multigrid_module import (laplacian, smooth_sweep, smooth_sweep_back,
+                              split, smooth, coarse, interpolate_add_to)
 
 
 class Buffers:
     """Set the MPI buffers for the variable var."""
 
-    def __init__(self, shape, var, width, overlap=0):
+    def __init__(self, shape, var, width, overlap=1):
         """
         Width of the buffer.
 
@@ -70,9 +70,9 @@ class Buffers:
         """Fill the communication buffers."""
         send = self.send_buffers
         slices = self.send_slices
+        MPI.Prequest.Startall(self.reqr)
         for direction in self.neighbours.keys():
             send[direction][:] = self.var[slices[direction]]
-        MPI.Prequest.Startall(self.reqr)
         MPI.Prequest.Startall(self.reqs)
         MPI.Prequest.Waitall(self.reqs)
 
@@ -89,12 +89,14 @@ def smooth_parallel(b, x, h, lplc, r, shape, iterations, com):
     """loop."""
     ny, nx = shape
 
-    com.fill_buffers()
-    com.fill_var()
-    for i in range(iterations):
+
+    for i in range(iterations//2):
+        com.fill_buffers()
+        com.fill_var()
         smooth_sweep(b, x, h)
         com.fill_buffers()
         com.fill_var()
+        smooth_sweep_back(b, x, h)
 
     laplacian(x, lplc, h)
     # Computing the residual.
@@ -117,28 +119,17 @@ def gather_blocks(comm, M_block, M_full):
             M_blocks += [np.zeros_like(M_block)]
 
     for i in range(4):
-        comm.Ibcast(M_blocks[i], i)
-    comm.barrier()
+        comm.Bcast(M_blocks[i], i)
 
     M_full[:nx2, :nx2] = M_blocks[0][:-1, :-1]
     M_full[:nx2, nx2:] = M_blocks[1][:-1, 2:]
     M_full[nx2:, :nx2] = M_blocks[2][2:, :-1]
     M_full[nx2:, nx2:] = M_blocks[3][2:, 2:]
 
-def split(A_in, A_out, rank):
-    nx_out, _ = A_out.shape
-    if rank == 0:
-        A_out[:] = A_in[0: nx_out, 0: nx_out]
-    elif rank == 1:
-        A_out[:] = A_in[0: nx_out, -nx_out:]
-    elif rank == 2:
-        A_out[:] = A_in[-nx_out:, 0: nx_out]
-    elif rank == 3:
-        A_out[:] = A_in[-nx_out:, -nx_out:]
 
-def offsets(rank):
-    ofs = [{"j": 0, "i": 0}, {"j": 0, "i": -1},
-           {"j": -1, "i": 0}, {"j": -1, "i": -1}]
+def offsets(rank, width=1):
+    ofs = [{"j": 0, "i": 0}, {"j": 0, "i": -width},
+           {"j": -width, "i": 0}, {"j": -width, "i": -width}]
     return ofs[rank]
 
 
@@ -171,6 +162,7 @@ class Multigrid:
         self.h0 = h0
         self.epsilon = epsilon
         self.bufs = []
+        self.width_halo = 1
 
         for i in range(n_para-1, n):
             self.lplc_wl += [np.zeros((2**(n-i)+1, 2**(n-i)+1))]
@@ -184,17 +176,19 @@ class Multigrid:
                 self.x_sb += [x0]
                 self.b_sb += [b0]
                 self.r_sb += [r0]
+                self.lplc_sb += [np.zeros((2**(n-i)+2, 2**(n-i)+2))]
             else:
                 self.x_sb += [np.zeros((2**(n-i)+2, 2**(n-i)+2))]
                 self.b_sb += [np.zeros((2**(n-i)+2, 2**(n-i)+2))]
                 self.r_sb += [np.zeros((2**(n-i)+2, 2**(n-i)+2))]
+                self.lplc_sb += [np.zeros((2**(n-i)+2, 2**(n-i)+2))]
             self.h_sb += [h0 * 2 ** i]
-            self.lplc_sb += [np.zeros((2**(n-i)+2, 2**(n-i)+2))]
-            self.bufs += [Buffers(self.x_sb[i].shape, self.x_sb[i], 1, 1)]
+            self.bufs += [Buffers(self.x_sb[i].shape, self.x_sb[i],
+                                  self.width_halo, 1)]
 
         self.b_sb += [np.zeros((2**(n-n_para)+2, 2**(n-n_para)+2))]
         # offset due to the hallos
-        self.ofst = offsets(self.bufs[0].rank)
+        self.ofst = offsets(self.bufs[0].rank, self.width_halo)
 
 
     def solve(self):
@@ -219,8 +213,8 @@ class Multigrid:
         r_wl = self.r_wl
         h_wl = self.h_wl
         h_sb = self.h_sb
-        n1 = 10
-        n2 = 20
+        n1 = 200
+        n2 = 200
         ofst = self.ofst
         n_para = self.n_para
         n = self.n
@@ -228,7 +222,7 @@ class Multigrid:
         comm = self.bufs[0].comm
 
         # Iterate until the residual is smaller than epsilon.
-        while status < 4 and it < 8:
+        while status < 4 and it < 200:
             # _________DESCENT_________
 
             # _SUBDOMAIN
@@ -290,7 +284,7 @@ class Multigrid:
             self.bufs[0].comm.barrier()
             err = np.amax(np.abs(self.r_sb[0]))
             if rank == 0:
-                if err > err_old:
+                if err > err_old*1.1:
                     print("error")
 
             if err > err_old*1.1:
@@ -310,7 +304,7 @@ class Multigrid:
 def test():
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
-    n = 5
+    n = 7
     epsilon = 0.001
     nx1 = 2 ** n + 1
     nx0 = 2 ** (n + 1) + 1
@@ -322,14 +316,15 @@ def test():
     X, Y = np.meshgrid(x, y)
 
     r = (X) ** 2 + (Y) ** 2
-    b0 = b_max*np.exp(-r/4)
-    # sign = 1
-    # xr = [ 4, -2,  6,  3,  3,  5, -5, -7]
-    # yr = [-2,  6,  6, -5,  5, -5, -2, -2]
-    # for x, y in zip(xr, yr):
-    #     r = (X-x) ** 2 + (Y-y) ** 2
-    #     b0 += sign*b_max * np.exp(-r * 7)
-    #     sign *= -1
+    # b0 = b_max*np.exp(-r/4)
+    b0 = np.zeros_like(X)
+    sign = 1
+    xr = [ 4, -2,  6,  3,  3,  5, -5, -7]
+    yr = [-2,  6,  6, -5,  5, -5, -2, -2]
+    for x, y in zip(xr, yr):
+        r = (X-x) ** 2 + (Y-y) ** 2
+        b0 += sign*b_max * np.exp(-r * 7)
+        sign *= -1
 
     b = np.zeros((nx1+1, nx1+1))
     split(b0, b, rank)
@@ -337,19 +332,22 @@ def test():
     a = np.zeros_like(b)
     R = np.zeros_like(a)
 
-    poisson = Multigrid(b, a, R, h, epsilon, n)
-
+    poisson = Multigrid(b, a, R, h, epsilon, n, 2)
     poisson.solve()
 
-    t = 0
-    for i in range(10):
-        a[:] = 0
-        t0 = perf_counter()
-        poisson.solve()
-        t1 = perf_counter()
-        t += t1-t0
-    print(f"time multi 1    {t/10} s")
-    plt.pcolormesh(R)
+    # lplc = np.zeros_like(a)
+    # buf = Buffers(a.shape, a, 1, 1)
+    # smooth_parallel(b, a, h, lplc, R, a.shape, 500, buf)
+
+    # t = 0
+    # for i in range(10):
+    #     a[:] = 0
+    #     t0 = perf_counter()
+    #     poisson.solve()
+    #     t1 = perf_counter()
+    #     t += t1-t0
+    # print(f"time multi 1    {t/10} s")
+    plt.pcolormesh(R/b_max)
     plt.colorbar()
     plt.show()
 
