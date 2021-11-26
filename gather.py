@@ -62,6 +62,7 @@ def gather_blocks(comm, M_block, M_full):
     nx2 = nx - 1
     _, nx0 = M_full.shape
     assert nx2*2 == nx0 + 1
+    rank = comm.Get_rank()
 
     M_blocks = []
     for i in range(4):
@@ -87,7 +88,7 @@ if __name__ == "__main__":
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
 
-    depth_para = 3
+    n_para = 3
     n = 4
     nx0 = 2**(1+n) + 1
 
@@ -104,9 +105,9 @@ if __name__ == "__main__":
 
     ofst = offsets(rank)
 
-    whole = [np.zeros((2**(n-i)+1, 2**(n-i)+1)) for i in range(depth_para-1, n)]
-    sub = [np.zeros((2**(n-i)+2, 2**(n-i)+2)) for i in range(depth_para+1)]
-    buf = [Buffers(sub[i].shape, sub[i], 1, 1) for i in range(depth_para+1)]
+    whole = [np.zeros((2**(n-i)+1, 2**(n-i)+1)) for i in range(n_para-1, n)]
+    sub = [np.zeros((2**(n-i)+2, 2**(n-i)+2)) for i in range(n_para+1)]
+    buf = [Buffers(sub[i].shape, sub[i], 1, 1) for i in range(n_para+1)]
     # sub[-1] is a temporary buffer to store data before gathering or spliting
 
     split(A, sub[0], rank)
@@ -120,7 +121,7 @@ if __name__ == "__main__":
     ###############################
 
     # _________Sub domain
-    for i in range(depth_para):
+    for i in range(n_para):
         buf[i].fill_buffers()
         buf[i].fill_var()
         buf[i].fill_buffers()
@@ -132,19 +133,19 @@ if __name__ == "__main__":
     # _________Whole domain
     #
     gather_blocks(comm, sub[-1], whole[0])
-    for i in range(n-depth_para):
+    for i in range(n-n_para):
         coarse(whole[i], whole[i+1], 0, 0)
 
     ###############################
     #           Ascent            #
     ###############################
-    for i in range(1, n-depth_para+1):
+    for i in range(1, n-n_para+1):
         whole[-i-1][:] = 0
         interpolate_add_to(whole[-i], whole[-i-1], 0, 0)
 
     # _________Sub domain
     split(whole[0], sub[-1], rank)
-    for i in range(1, depth_para):
+    for i in range(1, n_para):
         interpolate_add_to(sub[-i], sub[-i-1], ofst["i"], ofst["j"])
         if rank == 3:
             plt.pcolormesh(sub[-i-1])
