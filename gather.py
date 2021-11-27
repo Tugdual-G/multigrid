@@ -1,62 +1,13 @@
 #!/usr/bin/env python3
+
+"""Draft for parallel multigrid solver."""
+
 import numpy as np
 from numba import jit
 import matplotlib.pyplot as plt
 from mpi4py import MPI
 from parallel_multigrid import Buffers
 from multigrid_module import interpolate_add_to, coarse, split
-
-# @jit(nopython=True, cache=True)
-# def interpolate_add_to(a, a_new, ofst_i=0, ofst_j=0):
-#     """Interpolate."""
-#     for j in range(1, a.shape[0] - 1):
-#         for i in range(1, a.shape[1] - 1):
-#             a_new[2 * j+ofst_j, 2 * i+ofst_i] += a[j, i]
-#     for j in range(0, a.shape[0] - 1):
-#         for i in range(0, a.shape[1] - 1):
-#             a_new[2 * j + 1 + ofst_j, 2 * i + 1 + ofst_i] += (
-#                 a[j + 1, i + 1] + a[j + 1, i] + a[j, i + 1] + a[j, i]
-#             ) / 4
-#     for j in range(1, a.shape[0] - 1):
-#         for i in range(0, a.shape[1] - 1):
-#             a_new[2 * j + ofst_j, 2 * i + 1 + ofst_i] += (a[j, i] + a[j, i + 1]) / 2
-
-#     for j in range(0, a.shape[0] - 1):
-#         for i in range(1, a.shape[1] - 1):
-#             a_new[2 * j + 1 + ofst_j, 2 * i + ofst_i] += (a[j, i] + a[j + 1, i]) / 2
-
-
-# @jit(nopython=True, cache=True)
-# def coarse(a, a_crs, ofst_i=0, ofst_j=0):
-#     """Reduction on coarser grid."""
-#     for j in range(1, a_crs.shape[0] - 1):
-#         a_left = a[2 * j+ofst_j, 1+ofst_i] / 8 + (a[2 * j+ofst_j + 1, 1+ofst_i] + a[2 * j+ofst_j - 1, 1+ofst_i]) / 16
-#         for i in range(1, a_crs.shape[1] - 1):
-#             a_right = (
-#                 a[2 * j+ofst_j, 2 * i+ofst_i + 1] / 8
-#                 + (a[2 * j+ofst_j + 1, 2 * i+ofst_i + 1] + a[2 * j+ofst_j - 1, 2 * i+ofst_i + 1]) / 16
-#             )
-#             a_crs[j, i] = (
-#                 a[2 * j+ofst_j, 2 * i+ofst_i] / 4
-#                 + (a[2 * j+ofst_j + 1, 2 * i+ofst_i] + a[2 * j+ofst_j - 1, 2 * i+ofst_i]) * 1 / 8
-#             )
-#             a_crs[j, i] += a_right + a_left
-#             a_left = a_right
-
-
-# sign1 = '(double[:, :], double[:, :], int64)'
-# @jit(sign1, nopython=True, cache=True)
-# def split(A_in, A_out, rank):
-#     nx_out, _ = A_out.shape
-#     if rank == 0:
-#         A_out[:] = A_in[0: nx_out, 0: nx_out]
-#     elif rank == 1:
-#         A_out[:] = A_in[0: nx_out, -nx_out:]
-#     elif rank == 2:
-#         A_out[:] = A_in[-nx_out:, 0: nx_out]
-#     elif rank == 3:
-#         A_out[:] = A_in[-nx_out:, -nx_out:]
-
 
 
 def gather_blocks(comm, M_block, M_full):
