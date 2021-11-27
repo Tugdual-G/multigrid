@@ -29,6 +29,17 @@ def laplacian(a, lplc, h=1):
                 a[j + 1, i] - 4 * a[j, i]
             ) / (h ** 2)
 
+@cc.export('residual', '(f8[:,:], f8[:, :], f8[:, :], f8)')
+def residual(r, a, b, h=1):
+    """Compute the residual of a."""
+    ny, nx = a.shape
+    for j in range(1, ny - 1):
+        for i in range(1, nx - 1):
+            r[j, i] = b[j, i]-(
+                a[j, i - 1] + a[j, i + 1] + a[j - 1, i] +
+                a[j + 1, i] - 4 * a[j, i]
+            ) / (h ** 2)
+
 @cc.export('smooth_sweep', '(f8[:, :], f8[:, :], f8)')
 def smooth_sweep(b, a, h):
     """Gauss-Seidel method for multigrid."""
@@ -59,8 +70,24 @@ def smooth_sweep_back(b, a, h):
                 - h ** 2 * b[j, i]
             )
 
-@cc.export('smooth', '(f8[:, :], f8[:, :], f8, f8[:, :], f8[:, :], int64)')
-def smooth(b, x, h, lplc, r, iterations):
+@cc.export('smooth_sweep_jacobi', '(f8[:, :], f8[:, :], f8[:, :], f8)')
+def smooth_sweep_jacobi(b, a, a_new, h):
+    """Gauss-Seidel method for multigrid."""
+    ny, nx = a.shape
+
+    for j in range(1, ny - 1):
+        for i in range(1, nx - 1):
+            a_new[j, i] = 0.25 * (
+                a[j, i + 1]
+                + a[j, i - 1]
+                + a[j + 1, i]
+                + a[j - 1, i]
+                - h ** 2 * b[j, i]
+            )
+    a[:] = a_new
+
+@cc.export('smooth', '(f8[:, :], f8[:, :], f8, f8[:, :], int64)')
+def smooth(b, x, h, r, iterations):
 
     ny, nx = x.shape
     for k in range(iterations):
@@ -74,14 +101,47 @@ def smooth(b, x, h, lplc, r, iterations):
                     - h ** 2 * b[j, i]
                 )
 
-    # Computing the residual.
+    # Compute the residual
     for j in range(1, ny - 1):
         for i in range(1, nx - 1):
-            lplc[j, i] = (
+            r[j, i] = b[j, i]-(
                 x[j, i - 1] + x[j, i + 1] + x[j - 1, i] +
                 x[j + 1, i] - 4 * x[j, i]
             ) / (h ** 2)
-    r[:] = b - lplc
+
+@cc.export('smooth_altern', '(f8[:, :], f8[:, :], f8, f8[:, :], int64)')
+def smooth_altern(b, x, h, r, iterations):
+
+    a = 1.5
+    ny, nx = x.shape
+    for k in range(iterations):
+        for j in range(1, ny - 1):
+            for i in range(1, nx - 1):
+                x[j, i] = (1-a)*x[j, i]+a*0.25 * (
+                    x[j, i + 1]
+                    + x[j, i - 1]
+                    + x[j + 1, i]
+                    + x[j - 1, i]
+                    - h ** 2 * b[j, i]
+                )
+        for j in range(ny-2, 0, -1):
+            for i in range(nx - 2, 0, -1):
+                x[j, i] = (1-a)*x[j, i]+a*0.25 * (
+                    x[j, i + 1]
+                    + x[j, i - 1]
+                    + x[j + 1, i]
+                    + x[j - 1, i]
+                    - h ** 2 * b[j, i]
+                )
+
+    # Compute the residual
+    for j in range(1, ny - 1):
+        for i in range(1, nx - 1):
+            r[j, i] = b[j, i]-(
+                x[j, i - 1] + x[j, i + 1] + x[j - 1, i] +
+                x[j + 1, i] - 4 * x[j, i]
+            ) / (h ** 2)
+
 
 @cc.export('coarse', '(f8[:, :], f8[:, :], int64, int64)')
 def coarse(a, a_crs, ofst_i=0, ofst_j=0):
