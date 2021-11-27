@@ -89,6 +89,7 @@ def smooth_parallel(b, x, h, r, shape, iterations, com):
     """loop."""
     ny, nx = shape
 
+    # Intermediary array for jacobi
     a = np.zeros_like(x)
     a[:] = x
 
@@ -223,7 +224,7 @@ class Multigrid:
         smooth_parallel(b_sb[0], x_sb[0], h_sb[0],
                         r_sb[0], x_sb[0].shape, n1, self.bufs_x[0])
 
-        debug("dec sub", 0, r_sb[0])
+        # debug("dec sub", 0, r_sb[0])
 
         while status < 4 and it < 200:
             # _________DESCENT_________
@@ -234,13 +235,9 @@ class Multigrid:
                 x_sb[i][:] = 0
                 smooth_parallel(b_sb[i], x_sb[i], h_sb[i],
                                 r_sb[i], x_sb[i].shape, n1, self.bufs_x[i])
-                debug("dec sub", i, r_sb[i])
+                # debug("dec sub", i, r_sb[i])
                 self.bufs_r[i].exchange_buffers()
                 coarse(r_sb[i], b_sb[i+1], ofst["i"], ofst["j"])
-                # plt.pcolormesh(r_sb[i])
-                # plt.title(f"{rank}")
-                # plt.colorbar()
-                # plt.show()
 
             # _WHOLE DOMAIN
             x_wl[0][:] = 0
@@ -264,7 +261,7 @@ class Multigrid:
             interpolate_add_to(b_sb[-1], x_sb[-1], ofst["i"], ofst["j"])
             smooth_parallel(b_sb[-2], x_sb[-1], h_sb[-1],
                             r_sb[-1], x_sb[-1].shape, n2, self.bufs_x[-1])
-            debug("asc sub", -1, r_sb[-1])
+            # debug("asc sub", -1, r_sb[-1])
 
             for i in range(2, n_para+1):
                 interpolate_add_to(x_sb[-i+1], x_sb[-i],
@@ -273,18 +270,14 @@ class Multigrid:
                 # !!! b_sb has one more element than the other _sb[]
                 smooth_parallel(b_sb[-i-1], x_sb[-i], h_sb[-i],
                                 r_sb[-i], x_sb[-i].shape, n2, self.bufs_x[-i])
-                debug("+asc sub+", -i, r_sb[-i])
+                # debug("+asc sub+", -i, r_sb[-i])
 
-            self.bufs_x[0].comm.barrier()
             err = np.amax(np.abs(self.r_sb[0]))
-            if rank == 0:
-                if err > err_old:
-                    print("error")
-
             if err > err_old:
+                print("Convergence compromised : r>r+1 ")
                 fail = True
-
             err_old = err
+
             if err > self.epsilon and not fail:
                 status = comm.allreduce(0)
             else:
@@ -292,11 +285,11 @@ class Multigrid:
             it += 1
 
         if rank == 0:
-            print(f"v cycles :{it}")
+            print(f"v cycles : {it}")
         return err
 
 
-def test():
+if __name__ == "__main__":
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     n = 10
@@ -332,13 +325,6 @@ def test():
     err = poisson.solve()
     t1 = perf_counter()
 
-
-    # buf = Buffers(a.shape, a, 1, 1)
-    # t0 = perf_counter()
-    # smooth_parallel(b, a, h, R, a.shape, 2000, buf)
-    # t1 = perf_counter()
-    # err = np.max(np.abs(R))
-
     t = 0
     it = 10
     for i in range(it):
@@ -347,19 +333,14 @@ def test():
         poisson.solve()
         t1 = perf_counter()
         t += t1-t0
-    if rank == 1:
-        print(f"time multi 1  {t/(it*2**(n+1)-1):.3e} s/point")
-        print(f"time multi 1  {t/it:.3e} s")
-    # # plt.pcolormesh(R/b_max)
-    # # plt.colorbar()
-    # # plt.show()
 
     m_err = comm.reduce(err, MPI.MAX, 0)
     if rank==0:
         print(f"nx = {nx1}")
         print(f"n_para = {n_para}")
         print(f"{m_err/b_max:.1e}")
-        print(f"t {t1-t0}")
+        print(f"time multi 1  {t/(it*2**(n+1)-1):.3e} s/point")
+        print(f"time multi 1  {t/it:.3e} s")
 
     # a_full = np.zeros_like(b0)
     # R_full = np.zeros_like(b0)
@@ -384,6 +365,3 @@ def test():
     #     plt.savefig("test.png")
 
     #     plt.show()
-
-if __name__ == "__main__":
-    test()
