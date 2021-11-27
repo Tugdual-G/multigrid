@@ -6,9 +6,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from time import perf_counter
 from mpi4py import MPI
-from multigrid_module import (laplacian, residual,
+from multigrid_module import (residual,
                               smooth_sweep_jacobi,
-                              split, smooth, smooth_altern,
+                              split, smooth_altern,
                               coarse, interpolate_add_to)
 
 
@@ -225,7 +225,7 @@ class Multigrid:
 
         # Iterate until the residual is smaller than epsilon.
         smooth_parallel(b_sb[0], x_sb[0], h_sb[0],
-                        r_sb[0], x_sb[0].shape, n1, self.bufs_x[0])
+                        r_sb[0], x_sb[0].shape, 1, self.bufs_x[0])
 
         # debug("dec sub", 0, r_sb[0])
 
@@ -362,5 +362,4 @@ if __name__ == "__main__":
         ax0.axis('off')
         ax1.axis('off')
         # plt.colorbar(cm)
-        plt.savefig("test.png")
         plt.show()

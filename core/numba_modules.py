@@ -22,125 +22,111 @@ def split(A_in, A_out, rank):
 def laplacian(a, lplc, h=1):
     """Compute the laplacian of a."""
     ny, nx = a.shape
+    h = h**2
     for j in range(1, ny - 1):
         for i in range(1, nx - 1):
             lplc[j, i] = (
                 a[j, i - 1] + a[j, i + 1] + a[j - 1, i] +
                 a[j + 1, i] - 4 * a[j, i]
-            ) / (h ** 2)
+            ) / h
 
 @cc.export('residual', '(f8[:,:], f8[:, :], f8[:, :], f8)')
-def residual(r, a, b, h=1):
+def residual(r, a, b, h):
     """Compute the residual of a."""
     ny, nx = a.shape
+    h = h**2
     for j in range(1, ny - 1):
+        left = a[j, 0]/h
         for i in range(1, nx - 1):
-            r[j, i] = b[j, i]-(
-                a[j, i - 1] + a[j, i + 1] + a[j - 1, i] +
-                a[j + 1, i] - 4 * a[j, i]
-            ) / (h ** 2)
-
-@cc.export('smooth_sweep', '(f8[:, :], f8[:, :], f8)')
-def smooth_sweep(b, a, h):
-    """Gauss-Seidel method for multigrid."""
-    ny, nx = a.shape
-
-    for j in range(1, ny - 1):
-        for i in range(1, nx - 1):
-            a[j, i] = 0.25 * (
-                a[j, i + 1]
-                + a[j, i - 1]
-                + a[j + 1, i]
-                + a[j - 1, i]
-                - h ** 2 * b[j, i]
-            )
-
-@cc.export('smooth_sweep_back', '(f8[:, :], f8[:, :], f8)')
-def smooth_sweep_back(b, a, h):
-    """Gauss-Seidel method for multigrid."""
-    ny, nx = a.shape
-
-    for j in range(ny-2, 0, -1):
-        for i in range(nx - 2, 0, -1):
-            a[j, i] = 0.25 * (
-                a[j, i + 1]
-                + a[j, i - 1]
-                + a[j + 1, i]
-                + a[j - 1, i]
-                - h ** 2 * b[j, i]
-            )
+            cent = a[j, i]/h
+            r[j, i] = b[j, i] - left - (
+                a[j, i + 1] + a[j - 1, i] +
+                a[j + 1, i]) / h + cent*4
+            left = cent
 
 @cc.export('smooth_sweep_jacobi', '(f8[:, :], f8[:, :], f8[:, :], f8)')
-def smooth_sweep_jacobi(b, a, a_new, h):
+def smooth_sweep_jacobi(b, a, a_temp, h):
     """Gauss-Seidel method for multigrid."""
     ny, nx = a.shape
+    h = h**2
 
     for j in range(1, ny - 1):
         for i in range(1, nx - 1):
-            a_new[j, i] = 0.25 * (
+            a_temp[j, i] = 0.25 * (
                 a[j, i + 1]
                 + a[j, i - 1]
                 + a[j + 1, i]
                 + a[j - 1, i]
-                - h ** 2 * b[j, i]
+                - h * b[j, i]
             )
-    a[:] = a_new
+    for j in range(ny):
+        for i in range(nx):
+            a[j, i] = a_temp[j, i]
 
 @cc.export('smooth', '(f8[:, :], f8[:, :], f8, f8[:, :], int64)')
 def smooth(b, x, h, r, iterations):
-
+    a = 1.5
+    alpha = (1-a)
+    beta = a/4
+    h = h**2
     ny, nx = x.shape
     for k in range(iterations):
         for j in range(1, ny - 1):
             for i in range(1, nx - 1):
-                x[j, i] = 0.25 * (
+                x[j, i] = alpha * x[j, i] + beta * (
                     x[j, i + 1]
                     + x[j, i - 1]
                     + x[j + 1, i]
                     + x[j - 1, i]
-                    - h ** 2 * b[j, i]
+                    - h * b[j, i]
                 )
 
     # Compute the residual
     for j in range(1, ny - 1):
+        left = x[j, 0]/h
         for i in range(1, nx - 1):
-            r[j, i] = b[j, i]-(
-                x[j, i - 1] + x[j, i + 1] + x[j - 1, i] +
-                x[j + 1, i] - 4 * x[j, i]
-            ) / (h ** 2)
+            cent = x[j, i]/h
+            r[j, i] = b[j, i] - left - (
+                x[j, i + 1] + x[j - 1, i] +
+                x[j + 1, i]) / h + cent*4
+            left = cent
 
 @cc.export('smooth_altern', '(f8[:, :], f8[:, :], f8, f8[:, :], int64)')
 def smooth_altern(b, x, h, r, iterations):
-
     a = 1.5
+    alpha = (1-a)
+    beta = a/4
+    h = h**2
     ny, nx = x.shape
     for k in range(iterations):
         for j in range(1, ny - 1):
             for i in range(1, nx - 1):
-                x[j, i] = (1-a)*x[j, i]+a*0.25 * (
+                x[j, i] = alpha * x[j, i] + beta * (
                     x[j, i + 1]
                     + x[j, i - 1]
                     + x[j + 1, i]
                     + x[j - 1, i]
-                    - h ** 2 * b[j, i]
+                    - h * b[j, i]
                 )
         for j in range(ny-2, 0, -1):
             for i in range(nx - 2, 0, -1):
-                x[j, i] = (1-a)*x[j, i]+a*0.25 * (
+                x[j, i] = alpha * x[j, i] + beta * (
                     x[j, i + 1]
                     + x[j, i - 1]
                     + x[j + 1, i]
                     + x[j - 1, i]
-                    - h ** 2 * b[j, i]
+                    - h * b[j, i]
                 )
 
     # Compute the residual
     for j in range(1, ny - 1):
+        left = x[j, 0]/h
         for i in range(1, nx - 1):
-            r[j, i] = b[j, i]-(
-                x[j, i - 1] + x[j, i + 1] + x[j - 1, i] +
-                x[j + 1, i] - 4 * x[j, i]
-            ) / (h ** 2)
+            cent = x[j, i]/h
+            r[j, i] = b[j, i] - left - (
+                x[j, i + 1] + x[j - 1, i] +
+                x[j + 1, i]) / h + cent*4
+            left = cent
 
 
 @cc.export('coarse', '(f8[:, :], f8[:, :], int64, int64)')
