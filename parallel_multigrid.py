@@ -189,7 +189,6 @@ class Multigrid:
         self.ofst = offsets(self.bufs_x[0].rank, self.width_halo)
         print(f"hsb {self.h_sb}\nhwl {self.h_wl}")
 
-
     def solve(self):
         """
         Solve the Poisson equation by reapeating v cycles.
@@ -212,8 +211,8 @@ class Multigrid:
         r_wl = self.r_wl
         h_wl = self.h_wl
         h_sb = self.h_sb
-        n1 = 4
-        n2 = 4
+        n1 = 3
+        n2 = 5
         ofst = self.ofst
         n_para = self.n_para
         n = self.n
@@ -274,7 +273,9 @@ class Multigrid:
 
             err = np.amax(np.abs(self.r_sb[0]))
             if err > err_old:
-                print("Convergence compromised : r>r+1 ")
+                print("Convergence compromised : r>r+1 \n \
+                      Set n1 higher"
+                      )
                 fail = True
             err_old = err
 
@@ -292,19 +293,22 @@ class Multigrid:
 if __name__ == "__main__":
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
-    n = 10
-    n_para = 7
+    n = 7
+    n_para = 3
     b_max = 50
     epsilon = b_max*0.0005
+
+    # Domain size
     nx1 = 2 ** n + 1
     nx0 = 2 ** (n + 1) + 1
     x = np.linspace(-10, 10, nx0)
     y = np.linspace(-10, 10, nx0)
+    # Step
     h = y[1] - y[0]
     X, Y = np.meshgrid(x, y)
 
+    # Right hand side
     r = (X) ** 2 + (Y) ** 2
-    # b0 = b_max*np.exp(-r/4)
     b0 = np.zeros_like(X)
     sign = 1
     xr = [ 4, -2,  6,  3,  3,  5, -5, -7]
@@ -314,31 +318,38 @@ if __name__ == "__main__":
         b0 += sign*b_max * np.exp(-r * 7)
         sign *= -1
 
+    # Attribute the subdomains to the processors
     b = np.zeros((nx1+1, nx1+1))
     split(b0, b, rank)
 
+    # a is the unknow
     a = np.zeros_like(b)
+    # R is the residual
     R = np.zeros_like(a)
 
+    # initialize the solver
     poisson = Multigrid(b, a, R, h, epsilon, n, n_para)
+    # solve
     t0 = perf_counter()
     err = poisson.solve()
     t1 = perf_counter()
 
+    # Test
     t = 0
-    it = 10
+    it = 20
     for i in range(it):
-        a[:] = 0
+        # a[:] = 0
         t0 = perf_counter()
         poisson.solve()
         t1 = perf_counter()
         t += t1-t0
 
+    # Print results
     m_err = comm.reduce(err, MPI.MAX, 0)
-    if rank==0:
+    if rank == 0:
         print(f"nx = {nx1}")
         print(f"n_para = {n_para}")
-        print(f"{m_err/b_max:.1e}")
+        print(f"{m_err/b_max=:.1e}")
         print(f"time multi 1  {t/(it*2**(n+1)-1):.3e} s/point")
         print(f"time multi 1  {t/it:.3e} s")
 
@@ -348,7 +359,7 @@ if __name__ == "__main__":
     # gather_blocks(comm, R, R_full)
     # residual(R_full, a_full, b0, h)
 
-    # if rank==2:
+    # if rank == 2:
     #     fig, ax = plt.subplots(1, 2)
     #     ax0, ax1 = ax
     #     ax0.pcolormesh(a_full)
@@ -363,5 +374,4 @@ if __name__ == "__main__":
     #     ax1.axis('off')
     #     # plt.colorbar(cm)
     #     plt.savefig("test.png")
-
     #     plt.show()
