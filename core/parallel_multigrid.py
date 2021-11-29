@@ -6,10 +6,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from time import perf_counter
 from mpi4py import MPI
-from multigrid_module import (residual,
-                              smooth_sweep_jacobi,
-                              split, smooth_altern,
-                              coarse, interpolate_add_to)
+from multigrid_module import (
+    residual,
+    smooth_sweep_jacobi,
+    split,
+    smooth_altern,
+    coarse,
+    interpolate_add_to,
+)
 
 
 class Buffers:
@@ -32,10 +36,10 @@ class Buffers:
         self.send_slices = {}
         self.rec_slices = {}
 
-        self.send_slices["east"] = np.s_[:, -2 * width - overlap: -width - overlap]
-        self.send_slices["west"] = np.s_[:, width + overlap: overlap + 2 * width]
-        self.send_slices["north"] = np.s_[-2 * width - overlap: -width - overlap, :]
-        self.send_slices["south"] = np.s_[width + overlap: overlap + 2 * width, :]
+        self.send_slices["east"] = np.s_[:, -2 * width - overlap : -width - overlap]
+        self.send_slices["west"] = np.s_[:, width + overlap : overlap + 2 * width]
+        self.send_slices["north"] = np.s_[-2 * width - overlap : -width - overlap, :]
+        self.send_slices["south"] = np.s_[width + overlap : overlap + 2 * width, :]
 
         self.rec_slices["east"] = np.s_[:, -width:]
         self.rec_slices["west"] = np.s_[:, :width]
@@ -53,11 +57,19 @@ class Buffers:
 
         for direction in self.neighbours.keys():
             if direction == "west" or direction == "east":
-                self.send_buffers[direction] = np.zeros((self.ny, self.width))
-                self.rec_buffers[direction] = np.zeros((self.ny, self.width))
+                self.send_buffers[direction] = np.zeros(
+                    (self.ny, self.width), dtype=np.double
+                )
+                self.rec_buffers[direction] = np.zeros(
+                    (self.ny, self.width), dtype=np.double
+                )
             elif direction == "north" or direction == "south":
-                self.send_buffers[direction] = np.zeros((self.width, self.nx))
-                self.rec_buffers[direction] = np.zeros((self.width, self.nx))
+                self.send_buffers[direction] = np.zeros(
+                    (self.width, self.nx), dtype=np.double
+                )
+                self.rec_buffers[direction] = np.zeros(
+                    (self.width, self.nx), dtype=np.double
+                )
 
         self.reqr = []
         self.reqs = []
@@ -90,7 +102,7 @@ def smooth_parallel(b, x, h, r, shape, iterations, com):
     ny, nx = shape
 
     # Intermediary array for jacobi
-    a = np.zeros_like(x)
+    a = np.zeros_like(x, dtype=np.double)
     a[:] = x
 
     com.exchange_buffers()
@@ -107,7 +119,7 @@ def gather_blocks(comm, M_block, M_full):
     _, nx = M_block.shape
     nx2 = nx - 1
     _, nx0 = M_full.shape
-    assert nx2*2 == nx0 + 1
+    assert nx2 * 2 == nx0 + 1
     rank = comm.Get_rank()
 
     M_blocks = []
@@ -128,8 +140,12 @@ def gather_blocks(comm, M_block, M_full):
 
 def offsets(rank, width=1):
     """Determine the offset used when restricting or interpolating."""
-    ofs = [{"j": 0, "i": 0}, {"j": 0, "i": -width},
-           {"j": -width, "i": 0}, {"j": -width, "i": -width}]
+    ofs = [
+        {"j": 0, "i": 0},
+        {"j": 0, "i": -width},
+        {"j": -width, "i": 0},
+        {"j": -width, "i": -width},
+    ]
     return ofs[rank]
 
 
@@ -138,7 +154,7 @@ class Multigrid:
         # IDEA computing R directly whitout storing lplc
         _, self.nx = x0.shape
         self.n = n
-        assert self.nx == 2**n+2
+        assert self.nx == 2 ** n + 2
         self.n_para = n_para
         assert n_para < n
 
@@ -163,11 +179,17 @@ class Multigrid:
         self.bufs_r = []
         self.width_halo = 1
 
-        for i in range(n_para-1, n):
-            self.x_wl += [np.zeros((2**(n-i)+1, 2**(n-i)+1))]
-            self.b_wl += [np.zeros((2**(n-i)+1, 2**(n-i)+1))]
-            self.r_wl += [np.zeros((2**(n-i)+1, 2**(n-i)+1))]
-            self.h_wl += [h0 * 2 ** (i+1)]
+        for i in range(n_para - 1, n):
+            self.x_wl += [
+                np.zeros((2 ** (n - i) + 1, 2 ** (n - i) + 1), dtype=np.double)
+            ]
+            self.b_wl += [
+                np.zeros((2 ** (n - i) + 1, 2 ** (n - i) + 1), dtype=np.double)
+            ]
+            self.r_wl += [
+                np.zeros((2 ** (n - i) + 1, 2 ** (n - i) + 1), dtype=np.double)
+            ]
+            self.h_wl += [h0 * 2 ** (i + 1)]
 
         for i in range(n_para):
             if i == 0:
@@ -175,20 +197,34 @@ class Multigrid:
                 self.b_sb += [b0]
                 self.r_sb += [r0]
             else:
-                self.x_sb += [np.zeros((2**(n-i)+2, 2**(n-i)+2))]
-                self.b_sb += [np.zeros((2**(n-i)+2, 2**(n-i)+2))]
-                self.r_sb += [np.zeros((2**(n-i)+2, 2**(n-i)+2))]
+                self.x_sb += [
+                    np.zeros((2 ** (n - i) + 2, 2 ** (n - i) + 2), dtype=np.double)
+                ]
+                self.b_sb += [
+                    np.zeros((2 ** (n - i) + 2, 2 ** (n - i) + 2), dtype=np.double)
+                ]
+                self.r_sb += [
+                    np.zeros((2 ** (n - i) + 2, 2 ** (n - i) + 2), dtype=np.double)
+                ]
             self.h_sb += [h0 * 2 ** i]
-            self.bufs_x += [Buffers(self.x_sb[i].shape, self.x_sb[i],
-                                  self.width_halo, 1)]
-            self.bufs_r += [Buffers(self.r_sb[i].shape, self.r_sb[i],
-                                  self.width_halo, 1)]
+            self.bufs_x += [
+                Buffers(self.x_sb[i].shape, self.x_sb[i], self.width_halo, 1)
+            ]
+            self.bufs_r += [
+                Buffers(self.r_sb[i].shape, self.r_sb[i], self.width_halo, 1)
+            ]
 
-        self.b_sb += [np.zeros((2**(n-n_para)+2, 2**(n-n_para)+2))]
+        self.b_sb += [
+            np.zeros((2 ** (n - n_para) + 2, 2 ** (n - n_para) + 2), dtype=np.double)
+        ]
         # offset due to the hallos
         # Determine the offset used when restricting or interpolating.
-        ofs = [{"j": 0, "i": 0}, {"j": 0, "i": -1},
-               {"j": -1, "i": 0}, {"j": -1, "i": -1}]
+        ofs = [
+            {"j": 0, "i": 0},
+            {"j": 0, "i": -1},
+            {"j": -1, "i": 0},
+            {"j": -1, "i": -1},
+        ]
         self.ofst = ofs[self.bufs_x[0].rank]
         # iterations of v cycles counter
         self.it = 0
@@ -197,6 +233,7 @@ class Multigrid:
         """
         Solve the Poisson equation by reapeating v cycles.
         """
+
         def debug(strg, i, val):
             er = np.max(np.abs(val))
             m_er = comm.reduce(er, MPI.MAX, 0)
@@ -224,8 +261,9 @@ class Multigrid:
         comm = self.bufs_x[0].comm
 
         # Iterate until the residual is smaller than epsilon.
-        smooth_parallel(b_sb[0], x_sb[0], h_sb[0],
-                        r_sb[0], x_sb[0].shape, 1, self.bufs_x[0])
+        smooth_parallel(
+            b_sb[0], x_sb[0], h_sb[0], r_sb[0], x_sb[0].shape, 1, self.bufs_x[0]
+        )
 
         # debug("dec sub", 0, r_sb[0])
 
@@ -236,50 +274,68 @@ class Multigrid:
             # _SUBDOMAIN
             for i in range(1, n_para):
                 x_sb[i][:] = 0
-                smooth_parallel(b_sb[i], x_sb[i], h_sb[i],
-                                r_sb[i], x_sb[i].shape, n1, self.bufs_x[i])
+                smooth_parallel(
+                    b_sb[i],
+                    x_sb[i],
+                    h_sb[i],
+                    r_sb[i],
+                    x_sb[i].shape,
+                    n1,
+                    self.bufs_x[i],
+                )
                 # debug("dec sub", i, r_sb[i])
                 self.bufs_r[i].exchange_buffers()
-                coarse(r_sb[i], b_sb[i+1], ofst["i"], ofst["j"])
+                coarse(r_sb[i], b_sb[i + 1], ofst["i"], ofst["j"])
 
             # _WHOLE DOMAIN
             x_wl[0][:] = 0
             gather_blocks(comm, b_sb[-1], b_wl[0])
             smooth_altern(b_wl[0], x_wl[0], h_wl[0], r_wl[0], n1)
-            for i in range(1, n-n_para+1):
+            for i in range(1, n - n_para + 1):
                 x_wl[i][:] = 0
-                coarse(r_wl[i-1], b_wl[i], 0, 0)
+                coarse(r_wl[i - 1], b_wl[i], 0, 0)
                 smooth_altern(b_wl[i], x_wl[i], h_wl[i], r_wl[i], n1)
 
             # # # _________ASCENT_________
 
             # # _WHOLE DOMAIN
-            for i in range(2, n-n_para+1):
-                interpolate_add_to(x_wl[-i+1], x_wl[-i], 0, 0)
+            for i in range(2, n - n_para + 1):
+                interpolate_add_to(x_wl[-i + 1], x_wl[-i], 0, 0)
                 smooth_altern(b_wl[-i], x_wl[-i], h_wl[-i], r_wl[-i], n2)
 
             # _SUBDOMAIN
             split(x_wl[0], b_sb[-1], rank)
             # !!! b_sb has one more element than x_sb[]
             interpolate_add_to(b_sb[-1], x_sb[-1], ofst["i"], ofst["j"])
-            smooth_parallel(b_sb[-2], x_sb[-1], h_sb[-1],
-                            r_sb[-1], x_sb[-1].shape, n2, self.bufs_x[-1])
+            smooth_parallel(
+                b_sb[-2],
+                x_sb[-1],
+                h_sb[-1],
+                r_sb[-1],
+                x_sb[-1].shape,
+                n2,
+                self.bufs_x[-1],
+            )
             # debug("asc sub", -1, r_sb[-1])
 
-            for i in range(2, n_para+1):
-                interpolate_add_to(x_sb[-i+1], x_sb[-i],
-                                   ofst["i"], ofst["j"])
+            for i in range(2, n_para + 1):
+                interpolate_add_to(x_sb[-i + 1], x_sb[-i], ofst["i"], ofst["j"])
 
                 # !!! b_sb has one more element than the other _sb[]
-                smooth_parallel(b_sb[-i-1], x_sb[-i], h_sb[-i],
-                                r_sb[-i], x_sb[-i].shape, n2, self.bufs_x[-i])
+                smooth_parallel(
+                    b_sb[-i - 1],
+                    x_sb[-i],
+                    h_sb[-i],
+                    r_sb[-i],
+                    x_sb[-i].shape,
+                    n2,
+                    self.bufs_x[-i],
+                )
                 # debug("+asc sub+", -i, r_sb[-i])
 
             err = np.amax(np.abs(self.r_sb[0]))
-            if err > err_old*1.1:
-                print("Convergence compromised : r>r+1"
-                      ", set n1 higher"
-                      )
+            if err > err_old * 1.1:
+                print("Convergence compromised : r>r+1" ", set n1 higher")
                 fail = True
             err_old = err
 
@@ -296,9 +352,9 @@ if __name__ == "__main__":
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     n = 8
-    n_para = 3
+    n_para = 4
     b_max = 50
-    epsilon = b_max*0.0005
+    epsilon = b_max * 0.0005
 
     # Domain size
     nx1 = 2 ** n + 1
@@ -310,19 +366,19 @@ if __name__ == "__main__":
     X, Y = np.meshgrid(x, y)
 
     # Right hand side
-    r = np.zeros_like(X)
-    b0 = np.zeros_like(X)
+    r = np.zeros_like(X, dtype=np.double)
+    b0 = np.zeros_like(X, dtype=np.double)
     r = (X) ** 2 + (Y) ** 2
     b0 = b_max * np.exp(-r * 4)
 
     # Attribute the subdomains to the processors
-    b = np.zeros((nx1+1, nx1+1))
+    b = np.zeros((nx1 + 1, nx1 + 1), dtype=np.double)
     split(b0, b, rank)
 
     # a is the unknow
-    a = np.zeros_like(b)
+    a = np.zeros_like(b, dtype=np.double)
     # R is the residual
-    R = np.zeros_like(a)
+    R = np.zeros_like(a, dtype=np.double)
 
     # initialize the solver
     poisson = Multigrid(b, a, R, h, epsilon, n, n_para)
@@ -330,7 +386,23 @@ if __name__ == "__main__":
     t0 = perf_counter()
     err = poisson.solve()
     t1 = perf_counter()
-    t = t1-t0
+    t = t1 - t0
+
+    # Print results
+    m_err = comm.reduce(err, MPI.MAX, 0)
+    if rank == 0:
+        print(f"nx = {nx1}")
+        print(f"n_para = {n_para}")
+        print(f"{m_err/b_max=:.1e}")
+        print(f"time {t/(2**(n+1)-1):.3e} s/point")
+        print(f"time {t:.3e} s")
+        print(f"v cycles {poisson.it}")
+
+    # solve
+    t0 = perf_counter()
+    err = poisson.solve()
+    t1 = perf_counter()
+    t = t1 - t0
 
     # Print results
     m_err = comm.reduce(err, MPI.MAX, 0)
@@ -352,14 +424,14 @@ if __name__ == "__main__":
         fig, ax = plt.subplots(1, 2)
         ax0, ax1 = ax
         ax0.pcolormesh(a_full)
-        r_max = np.amax(np.abs(R_full/b_max))
+        r_max = np.amax(np.abs(R_full / b_max))
         cm = ax1.pcolormesh(R_full / b_max, cmap="bwr", vmin=-r_max, vmax=r_max)
         fig.suptitle(f"{nx0}x{nx0} grid points")
         ax0.set_title("phi")
         ax1.set_title(f"Residual / max(B) max={r_max:.1e}")
-        ax1.set_aspect('equal')
-        ax0.set_aspect('equal')
-        ax0.axis('off')
-        ax1.axis('off')
+        ax1.set_aspect("equal")
+        ax0.set_aspect("equal")
+        ax0.axis("off")
+        ax1.axis("off")
         # plt.colorbar(cm)
         plt.show()
