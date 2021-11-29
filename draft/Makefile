@@ -5,7 +5,7 @@
 # @version 0.1
 
 build:
-	gcc -shared -Wl,-soname,poisson -o3 poisson.so poisson.c
+	gcc -shared -Wl,-soname,poisson poisson.c -o poisson.so -Wall -O3
 
 run:
 	python speed.py
